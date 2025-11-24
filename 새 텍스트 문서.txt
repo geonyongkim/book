@@ -1,0 +1,108 @@
+import streamlit as st
+import pandas as pd
+import os
+
+# --- 설정 및 데이터 로드 ---
+FILE_NAME = 'books_data.csv'
+
+# 데이터 파일이 없으면 빈 데이터프레임 생성
+if not os.path.exists(FILE_NAME):
+    df = pd.DataFrame(columns=['제목', '레벨', '읽은횟수', '상태', '표지URL'])
+    df.to_csv(FILE_NAME, index=False)
+else:
+    df = pd.read_csv(FILE_NAME)
+
+# --- UI 설정 ---
+st.set_page_config(page_title="영어책 관리 매니저", layout="wide")
+
+st.title("📚 우리 아이 영어책 관리 매니저")
+st.markdown("엄마표 영어 독서 기록장입니다.")
+
+# 탭 구성: 등록하기 / 관리하기
+tab1, tab2 = st.tabs(["➕ 새 책 등록", "📖 서재 관리 (리스트)"])
+
+# --- [탭 1] 새 책 등록 기능 ---
+with tab1:
+    st.subheader("새로운 책 추가하기")
+    
+    with st.form("add_book_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("책 제목")
+            level = st.selectbox("난이도 단계", [1, 2, 3, 4, 5], help="1단계(쉬움) ~ 5단계(어려움)")
+        with col2:
+            img_url = st.text_input("책 표지 이미지 URL", placeholder="http://... (이미지 주소 붙여넣기)")
+            status = st.radio("현재 상태", ["읽지 않음", "읽는 중", "완독"])
+        
+        submitted = st.form_submit_button("책 등록하기")
+        
+        if submitted and title:
+            new_data = {
+                '제목': title, 
+                '레벨': level, 
+                '읽은횟수': 0, 
+                '상태': status, 
+                '표지URL': img_url if img_url else "https://via.placeholder.com/150?text=No+Image" # 이미지 없으면 기본 이미지
+            }
+            # 데이터 추가 및 저장
+            df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
+            df.to_csv(FILE_NAME, index=False)
+            st.success(f"'{title}' 등록 완료!")
+            st.rerun() # 화면 갱신
+
+# --- [탭 2] 서재 관리 (리스트 & 수정) ---
+with tab2:
+    st.subheader("현재 보유 도서 현황")
+
+    # 필터링 기능
+    col_filter1, col_filter2 = st.columns(2)
+    with col_filter1:
+        filter_level = st.multiselect("레벨별 모아보기", [1, 2, 3, 4, 5], default=[1, 2, 3, 4, 5])
+    with col_filter2:
+        filter_status = st.multiselect("상태별 모아보기", ["읽지 않음", "읽는 중", "완독"], default=["읽지 않음", "읽는 중", "완독"])
+
+    # 데이터 필터링 적용
+    filtered_df = df[df['레벨'].isin(filter_level) & df['상태'].isin(filter_status)]
+
+    # 그리드 형태로 보여주기 (PC에서는 한 줄에 3개, 모바일은 1개씩 보임)
+    if not filtered_df.empty:
+        # 인덱스를 리셋하여 순회
+        for i, row in filtered_df.iterrows():
+            # 카드를 구분하기 위한 컨테이너
+            with st.container():
+                c1, c2 = st.columns([1, 4])
+                
+                # 왼쪽: 표지 이미지
+                with c1:
+                    try:
+                        st.image(row['표지URL'], width=100)
+                    except:
+                        st.error("이미지 오류")
+
+                # 오른쪽: 정보 및 조작 버튼
+                with c2:
+                    st.markdown(f"### {row['제목']} (Lv.{row['레벨']})")
+                    st.info(f"현재 상태: **{row['상태']}** | 💯 읽은 횟수: **{row['읽은횟수']}회**")
+                    
+                    # 조작 버튼들 (한 줄에 배치)
+                    b1, b2, b3 = st.columns(3)
+                    if b1.button("➕ 1회 읽기 추가", key=f"add_{i}"):
+                        df.at[i, '읽은횟수'] += 1
+                        # 상태가 '읽지 않음'이면 '읽는 중'으로 자동 변경 로직
+                        if df.at[i, '상태'] == '읽지 않음':
+                            df.at[i, '상태'] = '읽는 중'
+                        df.to_csv(FILE_NAME, index=False)
+                        st.rerun()
+                    
+                    if b2.button("✅ 완독 처리", key=f"finish_{i}"):
+                        df.at[i, '상태'] = '완독'
+                        df.to_csv(FILE_NAME, index=False)
+                        st.rerun()
+
+                    if b3.button("🗑 삭제", key=f"del_{i}"):
+                        df = df.drop(i)
+                        df.to_csv(FILE_NAME, index=False)
+                        st.rerun()
+                st.divider() # 구분선
+    else:
+        st.info("조건에 맞는 책이 없습니다.")
