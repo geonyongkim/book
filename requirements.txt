@@ -4,3 +4,5 @@ requests
 Pillow
 pyzbar
 plotly-express
+gspread
+google-auth
