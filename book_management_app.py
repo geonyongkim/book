@@ -15,7 +15,7 @@ from google.oauth2.service_account import Credentials
 # =========================================================
 # 🚨 [필수 설정] 아래 주소를 사용자님의 구글 시트 주소로 바꿔주세요!
 # =========================================================
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1xxxxxxx/edit" 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1WyA_dM3_cxqurORJ1wbYACBFBgDG9-4b_wPk8nWbwhA/edit?gid=1353177291#gid=1353177291" 
 # (브라우저 주소창에 있는 링크를 그대로 복사해서 위 따옴표 안에 넣으세요)
 
 # --- [반응 옵션 정의] ---
