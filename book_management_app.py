@@ -3,11 +3,11 @@ import pandas as pd
 import os
 import uuid
 import requests
+import urllib.parse # [추가] URL 인코딩을 위한 라이브러리
 from PIL import Image, ImageEnhance
 from pyzbar.pyzbar import decode
 from datetime import datetime, timedelta
 import plotly.express as px
-import plotly.graph_objects as go
 
 # --- 파일 설정 ---
 BOOK_FILE = 'books_data.csv'
@@ -95,9 +95,9 @@ def search_book_info(isbn):
 st.set_page_config(page_title="아이 영어 독서 매니저", layout="wide", page_icon="📚")
 books_df, logs_df = load_data()
 
-st.title("📚 Smart English Library v2.5")
+st.title("📚 Smart English Library v2.6")
 
-tab1, tab2, tab3 = st.tabs(["📊 상세 대시보드", "📖 서재 관리 (정렬/수정)", "➕ 새 책 등록"])
+tab1, tab2, tab3 = st.tabs(["📊 상세 대시보드", "📖 서재 관리 (오디오/수정)", "➕ 새 책 등록"])
 
 # --- [탭 1] 상세 대시보드 ---
 with tab1:
@@ -137,7 +137,6 @@ with tab1:
         with c2:
             st.subheader("🧸 아이의 반응 분석")
             if not books_df.empty:
-                # '선택 안 함' 제외하고 분석 (원하면 포함 가능)
                 reaction_counts = books_df[books_df['반응'] != '선택 안 함']['반응'].value_counts().reset_index()
                 reaction_counts.columns = ['반응', '권수']
                 if not reaction_counts.empty:
@@ -165,36 +164,29 @@ with tab1:
                 lvl_counts = books_df['레벨'].value_counts().sort_index()
                 st.bar_chart(lvl_counts)
 
-# --- [탭 2] 서재 관리 (정렬 기능 강화) ---
+# --- [탭 2] 서재 관리 (유튜브 링크 추가됨) ---
 with tab2:
     c_head, c_sort = st.columns([3, 2])
     with c_head:
         st.subheader("보유 도서 관리")
     with c_sort:
-        # [기능 추가] 정렬 옵션
         sort_option = st.selectbox(
             "📚 정렬 기준", 
             ["최신 등록순", "자주 읽은 책 (Best)", "안 읽은 책 (0회)", "아이 반응별 모아보기", "레벨 높은 순"]
         )
 
-    # 데이터 정렬 로직
     if not books_df.empty:
         display_df = books_df.copy()
         
-        if sort_option == "최신 등록순":
-            display_df = display_df.iloc[::-1]
-        elif sort_option == "자주 읽은 책 (Best)":
-            display_df = display_df.sort_values(by='읽은횟수', ascending=False)
-        elif sort_option == "안 읽은 책 (0회)":
-            display_df = display_df.sort_values(by='읽은횟수', ascending=True)
-        elif sort_option == "아이 반응별 모아보기":
-            display_df = display_df.sort_values(by='반응', ascending=False) # 가나다 역순(재미있어요가 위로 오게)
-        elif sort_option == "레벨 높은 순":
-            display_df = display_df.sort_values(by='레벨', ascending=False)
+        # 정렬 로직
+        if sort_option == "최신 등록순": display_df = display_df.iloc[::-1]
+        elif sort_option == "자주 읽은 책 (Best)": display_df = display_df.sort_values(by='읽은횟수', ascending=False)
+        elif sort_option == "안 읽은 책 (0회)": display_df = display_df.sort_values(by='읽은횟수', ascending=True)
+        elif sort_option == "아이 반응별 모아보기": display_df = display_df.sort_values(by='반응', ascending=False)
+        elif sort_option == "레벨 높은 순": display_df = display_df.sort_values(by='레벨', ascending=False)
 
         st.caption(f"총 {len(display_df)}권의 책이 표시됩니다.")
 
-        # 리스트 출력
         for i, row in display_df.iterrows():
             with st.container():
                 c1, c2 = st.columns([1, 5])
@@ -209,39 +201,43 @@ with tab2:
                     st.text(f"ISBN: {row['ISBN'] if pd.notna(row['ISBN']) else '-'}")
 
                     ec1, ec2, ec3 = st.columns([1, 1.2, 2.5])
-                    
-                    # 원래 데이터프레임의 실제 인덱스 찾기 (수정 저장을 위해 필수)
                     real_idx = books_df[books_df['ID'] == row['ID']].index[0]
 
-                    # 1. 레벨
+                    # 1. 수정 컨트롤
                     cur_lvl = int(row['레벨'] - 1) if 1 <= row['레벨'] <= 5 else 0
                     with ec1:
                         new_lvl = st.selectbox("레벨", [1,2,3,4,5], index=cur_lvl, key=f"l_{row['ID']}", label_visibility="collapsed")
-
-                    # 2. 상태
+                    
                     sts_opts = ["읽지 않음", "읽는 중", "완독"]
                     try: s_idx = sts_opts.index(row['상태'])
                     except: s_idx = 0
                     with ec2:
                         new_sts = st.selectbox("상태", sts_opts, index=s_idx, key=f"s_{row['ID']}", label_visibility="collapsed")
                     
-                    # 3. 반응
                     try: r_idx = REACTION_OPTIONS.index(row['반응'])
                     except: r_idx = 0
                     with ec3:
                         new_react = st.selectbox("반응", REACTION_OPTIONS, index=r_idx, key=f"r_{row['ID']}", label_visibility="collapsed")
 
-                    # 변경 감지 및 즉시 저장
+                    # 수정 즉시 저장
                     if new_lvl != row['레벨'] or new_sts != row['상태'] or new_react != row['반응']:
                         books_df.at[real_idx, '레벨'] = new_lvl
                         books_df.at[real_idx, '상태'] = new_sts
                         books_df.at[real_idx, '반응'] = new_react
                         save_books(books_df)
-                        st.toast(f"✅ 수정 완료! 대시보드에 반영되었습니다.")
+                        st.toast(f"✅ 수정 완료!")
                         st.rerun()
 
-                    # 버튼
-                    b1, b2 = st.columns([1, 1])
+                    # [기능 추가] 유튜브 링크 생성
+                    # 검색어: "책제목 Audio file"
+                    search_query = f"{row['제목']} Audio file"
+                    encoded_query = urllib.parse.quote(search_query) # URL 인코딩
+                    youtube_url = f"https://www.youtube.com/results?search_query={encoded_query}"
+
+                    # 2. 액션 버튼 (읽기 / 유튜브 / 삭제)
+                    b1, b2, b3 = st.columns([1.2, 1.2, 1])
+                    
+                    # (1) 읽기 추가
                     if b1.button(f"➕ 읽기 추가 ({row['읽은횟수']}회)", key=f"btn_r_{row['ID']}"):
                         books_df.at[real_idx, '읽은횟수'] += 1
                         if books_df.at[real_idx, '상태'] == '읽지 않음': books_df.at[real_idx, '상태'] = '읽는 중'
@@ -250,7 +246,12 @@ with tab2:
                         st.toast("📖 독서 기록 추가 완료!")
                         st.rerun()
 
-                    if b2.button("🗑 삭제", key=f"btn_d_{row['ID']}"):
+                    # (2) [NEW] 유튜브 바로가기 버튼
+                    with b2:
+                        st.link_button("🎧 오디오 찾기", youtube_url, help=f"유튜브에서 '{row['제목']} Audio file' 검색 결과를 엽니다.")
+
+                    # (3) 삭제
+                    if b3.button("🗑 삭제", key=f"btn_d_{row['ID']}"):
                         books_df = books_df.drop(real_idx)
                         save_books(books_df)
                         st.rerun()
@@ -284,7 +285,7 @@ with tab3:
                     st.session_state.update({'auto_isbn': isbn_val, 'auto_title': t or "", 'auto_img': i or "", 'search_done': True})
                     st.rerun()
         else:
-            st.error("바코드 인식 실패. 다시 시도해주세요.")
+            st.error("바코드 인식 실패.")
 
     if input_method == "✍️ 수동 입력":
         manual_isbn = st.text_input("ISBN 직접 입력", value=st.session_state['auto_isbn'])
@@ -321,5 +322,5 @@ with tab3:
                 
                 for key in ['auto_title', 'auto_isbn', 'auto_img', 'search_done', 'last_manual']:
                     if key in st.session_state: del st.session_state[key]
-                st.success("등록 완료! 대시보드에 즉시 반영됩니다.")
+                st.success("등록 완료!")
                 st.rerun()
