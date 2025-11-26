@@ -167,8 +167,8 @@ st.set_page_config(page_title="아이 영어 독서 매니저 (Pro)", layout="wi
 with st.spinner("구글 시트와 연결 중..."):
     books_df, logs_df = load_data()
 
-st.title("📚 Smart English Library v4.3")
-st.caption("음원 듣기 복구 | 갤러리 업로드 지원 (인식률 향상)")
+st.title("📚 Smart English Library v4.4")
+st.caption("유튜브 검색 복구 | 갤러리/카메라 통합 스캔 지원")
 
 tab1, tab2, tab3 = st.tabs(["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록"])
 
@@ -212,7 +212,7 @@ with tab1:
                     r2.columns = ['반응', '권수']
                     if not r2.empty: st.plotly_chart(px.pie(r2, values='권수', names='반응', hole=0.4), use_container_width=True)
 
-# --- [탭 2] 서재 관리 (음원 버튼 복구 및 갤러리 스캔 추가) ---
+# --- [탭 2] 서재 관리 ---
 with tab2:
     c_head, c_sort = st.columns([3, 2])
     with c_head: st.subheader("보유 도서 목록")
@@ -235,59 +235,58 @@ with tab2:
             with st.container():
                 c1, c2 = st.columns([1, 5])
                 
-                # [좌측: 표지 및 음원 듣기 버튼]
+                # [좌측: 표지 및 미디어 버튼]
                 with c1: 
                     img_url = row['표지URL'] if pd.notna(row['표지URL']) and str(row['표지URL']).startswith("http") else "https://via.placeholder.com/150?text=No+Image"
                     st.image(img_url, width=80)
                     
-                    # [수정됨] 음원 듣기 버튼 강제 표시 로직
+                    # 1. 등록된 음원 듣기 버튼
                     audio_url = str(row.get('음원URL', '')).strip()
                     if audio_url.startswith("http"):
-                        st.link_button("🎧 음원 듣기", audio_url, help="클릭하면 음원이 재생됩니다.")
-                    else:
-                        st.caption("음원 없음")
+                        st.link_button("🎧 직접 듣기", audio_url, help="등록된 음원 주소로 바로 연결")
+                    
+                    # 2. ★ [요청 복구] 유튜브 검색(Read Aloud) 버튼 ★
+                    search_query = f"{row['제목']} read a loud"
+                    youtube_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
+                    st.link_button("▶️ Read Aloud", youtube_url, help="유튜브에서 Read Aloud 영상 검색")
 
                 # [우측: 정보 및 기능]
                 with c2:
                     new_title = st.text_input("제목", value=row['제목'], key=f"t_{row['ID']}", label_visibility="collapsed")
                     
-                    # [수정됨] 상세 수정 메뉴 (갤러리 스캔 지원)
-                    with st.expander("📝 상세 정보 / 반응 기록 / QR 등록"):
+                    # 상세 수정 메뉴 (갤러리 스캔 지원 추가)
+                    with st.expander("📝 상세 정보 / 반응 기록 / 음원 등록"):
                         st.caption(f"ISBN: {row['ISBN']}")
                         new_img = st.text_input("표지 URL", value=row['표지URL'], key=f"img_{row['ID']}")
                         
                         st.markdown("---")
                         st.markdown("**🎵 음원(QR) 관리**")
                         
-                        # 1. 텍스트 입력
                         new_audio = st.text_input("음원 링크 (직접 입력)", value=audio_url, key=f"aud_{row['ID']}")
                         
-                        # 2. 스캔 방식 선택 (카메라 vs 갤러리)
-                        scan_type = st.radio("QR 스캔 방식", ["📸 직접 촬영", "🖼️ 갤러리 사진 업로드"], horizontal=True, key=f"stype_{row['ID']}")
+                        # [추가됨] QR 스캔 방식 선택 (서재 관리용)
+                        scan_method = st.radio("QR 스캔 방식", ["📸 카메라 촬영", "🖼️ 갤러리 업로드"], horizontal=True, key=f"sm_{row['ID']}")
                         
-                        scan_img = None
-                        if scan_type == "📸 직접 촬영":
-                            scan_img = st.camera_input("QR 촬영", key=f"cam_{row['ID']}")
+                        scan_res = None
+                        if scan_method == "📸 카메라 촬영":
+                            scan_res = st.camera_input("QR 촬영", key=f"cam_{row['ID']}")
                         else:
-                            scan_img = st.file_uploader("QR 사진 선택", type=['png', 'jpg', 'jpeg'], key=f"upl_{row['ID']}")
+                            scan_res = st.file_uploader("QR 사진 선택", type=['png', 'jpg', 'jpeg'], key=f"upl_{row['ID']}")
                         
-                        # 스캔 처리
-                        if scan_img:
-                            scanned = scan_code(scan_img)
-                            if scanned:
-                                st.success(f"QR 인식됨: {scanned}")
-                                new_audio = scanned
+                        if scan_res:
+                            code = scan_code(scan_res)
+                            if code:
+                                st.success(f"QR 인식됨: {code}")
+                                new_audio = code
                         
                         st.markdown("---")
                         st.markdown("**🧸 아이 반응**")
                         rc1, rc2 = st.columns(2)
                         cur_r1 = row.get('반응_첫째', '선택 안 함')
                         cur_r2 = row.get('반응_둘째', '선택 안 함')
-                        idx1 = REACTION_OPTIONS.index(cur_r1) if cur_r1 in REACTION_OPTIONS else 0
-                        idx2 = REACTION_OPTIONS.index(cur_r2) if cur_r2 in REACTION_OPTIONS else 0
                         
-                        new_r1 = rc1.selectbox("첫째", REACTION_OPTIONS, index=idx1, key=f"r1_{row['ID']}")
-                        new_r2 = rc2.selectbox("둘째", REACTION_OPTIONS, index=idx2, key=f"r2_{row['ID']}")
+                        new_r1 = rc1.selectbox("첫째", REACTION_OPTIONS, index=(REACTION_OPTIONS.index(cur_r1) if cur_r1 in REACTION_OPTIONS else 0), key=f"r1_{row['ID']}")
+                        new_r2 = rc2.selectbox("둘째", REACTION_OPTIONS, index=(REACTION_OPTIONS.index(cur_r2) if cur_r2 in REACTION_OPTIONS else 0), key=f"r2_{row['ID']}")
                         new_memo = st.text_area("메모", value=row.get('반응_메모', ''), key=f"m_{row['ID']}", height=60)
 
                     # 레벨/상태
@@ -315,7 +314,7 @@ with tab2:
                         st.toast("✅ 수정되었습니다!")
                         st.rerun()
 
-                    # 읽기/삭제 버튼
+                    # 읽기/삭제
                     b1, b3 = st.columns([2, 1])
                     if b1.button(f"➕ 읽기 ({int(row['읽은횟수'])})", key=f"read_{row['ID']}"):
                         real_idx = books_df[books_df['ID'] == row['ID']].index[0]
@@ -338,19 +337,18 @@ with tab2:
                 st.divider()
     else: st.info("등록된 책이 없습니다.")
 
-# --- [탭 3] 새 책 등록 (갤러리 업로드 추가) ---
+# --- [탭 3] 새 책 등록 ---
 with tab3:
     st.subheader("새 책 등록")
     if 'reg_title' not in st.session_state: 
         st.session_state.update({'reg_title':"", 'reg_isbn':"", 'reg_img':"", 'reg_audio':"", 'search_done':False})
 
     st.markdown("##### 1. 책 찾기")
-    # [수정됨] 입력 방식에 갤러리 업로드 명확히 구분
-    input_method = st.radio("방식 선택", ["📸 바코드 촬영", "🖼️ 바코드 사진 업로드 (갤러리)", "✍️ 수동 입력"], horizontal=True, label_visibility="collapsed")
+    input_method = st.radio("방식 선택", ["📸 바코드 촬영", "🖼️ 바코드 사진 업로드", "✍️ 수동 입력"], horizontal=True, label_visibility="collapsed")
     
     img_file = None 
     if input_method == "📸 바코드 촬영": img_file = st.camera_input("바코드 촬영", key="cam_reg")
-    elif input_method == "🖼️ 바코드 사진 업로드 (갤러리)": img_file = st.file_uploader("바코드 사진 선택", type=['png', 'jpg', 'jpeg'])
+    elif input_method == "🖼️ 바코드 사진 업로드": img_file = st.file_uploader("바코드 사진 선택", type=['png', 'jpg'])
 
     if img_file and not st.session_state['search_done']:
         code = scan_code(img_file)
@@ -362,7 +360,7 @@ with tab3:
                     st.session_state.update({'reg_isbn': code, 'reg_title': t or "", 'reg_img': i or "", 'search_done': True})
                     st.rerun()
         else:
-            st.warning("바코드를 인식하지 못했습니다. 사진을 더 선명하게 찍거나 수동 입력을 이용하세요.")
+            st.warning("인식 실패. 사진을 다시 찍거나 수동 입력을 이용하세요.")
 
     if input_method == "✍️ 수동 입력":
         manual = st.text_input("ISBN 입력", value=st.session_state['reg_isbn'])
@@ -383,13 +381,13 @@ with tab3:
             status = st.selectbox("상태", ["읽지 않음", "읽는 중", "완독"])
         with c2:
             img_url = st.text_input("표지 URL", value=st.session_state['reg_img'])
-            audio_url = st.text_input("음원 주소 (QR은 아래 이용)", value=st.session_state['reg_audio'])
+            audio_url = st.text_input("음원 주소 (직접 입력 혹은 아래 QR)", value=st.session_state['reg_audio'])
 
         st.markdown("**🧸 아이 반응 & 메모**")
         rc1, rc2 = st.columns(2)
         r1 = rc1.selectbox("첫째", REACTION_OPTIONS)
         r2 = rc2.selectbox("둘째", REACTION_OPTIONS)
-        note = st.text_area("메모", height=60, placeholder="내용 입력")
+        note = st.text_area("메모", height=60)
 
         if st.form_submit_button("등록하기"):
             if not title: st.error("제목은 필수입니다.")
@@ -410,18 +408,17 @@ with tab3:
                 st.success("등록 완료!")
                 st.rerun()
 
-    # (폼 밖) 음원 QR 스캔 (방식 선택 추가)
-    st.markdown("##### 🎵 음원 QR 스캔 (선택)")
-    audio_scan_method = st.radio("QR 스캔 방식", ["📸 직접 촬영", "🖼️ 갤러리 사진 업로드"], horizontal=True, key="aud_method")
+    st.markdown("##### 🎵 음원 QR 등록")
+    audio_method = st.radio("QR 등록 방식", ["📸 카메라 촬영", "🖼️ 갤러리 업로드"], horizontal=True, key="am_reg")
     
-    qr_img = None
-    if audio_scan_method == "📸 직접 촬영":
-        qr_img = st.camera_input("QR 촬영", key="cam_audio")
+    qr_res = None
+    if audio_method == "📸 카메라 촬영":
+        qr_res = st.camera_input("QR 촬영", key="cam_aud_reg")
     else:
-        qr_img = st.file_uploader("QR 사진 업로드", type=['png', 'jpg'], key="file_audio")
+        qr_res = st.file_uploader("QR 사진 선택", type=['png', 'jpg'], key="upl_aud_reg")
         
-    if qr_img:
-        code = scan_code(qr_img)
+    if qr_res:
+        code = scan_code(qr_res)
         if code:
             st.success("QR 인식 성공!")
             if st.session_state['reg_audio'] != code:
