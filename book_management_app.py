@@ -256,7 +256,7 @@ with tab2:
                         st.toast(f"✅ 수정 완료")
                         st.rerun()
 
-                    search_query = f"{row['제목']} Audio file"
+                    search_query = f"{row['제목']} read a loud"
                     youtube_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
 
                     b1, b2, b3 = st.columns([1.2, 1.2, 1])
