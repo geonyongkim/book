@@ -57,7 +57,7 @@ def save_board(df):
     load_data.clear()
     time.sleep(1)
 
-# --- [함수 3] 데이터 로드 (중복 제거 및 안정화) ---
+# --- [함수 3] 데이터 로드 ---
 @st.cache_data(ttl=60, show_spinner="동기화 중...")
 def load_data():
     client = get_google_sheet_client()
@@ -97,7 +97,6 @@ def load_data():
         for col in ['횟수_첫째', '횟수_둘째']:
             books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
         
-        # ID 보정 및 중복 제거
         missing_ids = False
         for i, row in books_df.iterrows():
             if not row['ID'] or str(row['ID']).strip() == "":
@@ -241,7 +240,7 @@ st.set_page_config(page_title="아이 영어 독서 매니저 (Final)", layout="
 # 데이터 로드
 books_df, logs_df, board_df = load_data()
 
-st.title("📚 Smart English Library v6.6")
+st.title("📚 Smart English Library v6.7")
 
 # 상단 메뉴바
 menu = st.radio("이동할 메뉴를 선택하세요", ["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 정보 게시판"], horizontal=True, label_visibility="collapsed")
@@ -293,7 +292,7 @@ if menu == "📊 대시보드":
                     st.caption("아직 별점 기록이 없습니다.")
 
 # ---------------------------------------------------------
-# 2. 서재 관리 화면
+# 2. 서재 관리 화면 (UI 개선)
 # ---------------------------------------------------------
 elif menu == "📖 서재 관리":
     c_head, c_sort = st.columns([3, 2])
@@ -315,64 +314,72 @@ elif menu == "📖 서재 관리":
             with st.container(border=True):
                 c1, c2 = st.columns([1, 4])
                 
+                # [좌측: 이미지 & 미디어]
                 with c1:
                     img_url = row['표지URL'] if pd.notna(row['표지URL']) and str(row['표지URL']).startswith("http") else "https://via.placeholder.com/150?text=No+Image"
                     st.image(img_url, width=90)
                     
+                    # 미디어 버튼
                     audio_url = str(row.get('음원URL', '')).strip()
                     if audio_url.startswith("http"):
-                        st.link_button("🎧 음원 듣기", audio_url, use_container_width=True)
+                        st.link_button("🎧 음원", audio_url, use_container_width=True)
                     
                     search_query = f"{row['제목']} read a loud"
                     yt_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
-                    st.link_button("▶️ Read Aloud", yt_url, use_container_width=True)
+                    st.link_button("▶️ 영상", yt_url, use_container_width=True)
 
+                # [우측: 정보 & 컨트롤]
                 with c2:
-                    st.markdown(f"### {row['제목']}")
-                    st.caption(f"ISBN: {row['ISBN']} | Lv.{row['레벨']}")
+                    st.markdown(f"#### {row['제목']}")
+                    st.caption(f"ISBN: {row['ISBN']} | Level: {row['레벨']}")
                     
-                    st.write("---")
-                    
-                    # [수정됨] 키 중복 방지를 위해 prefix를 'btn_p1', 'btn_m1' 등으로 변경
-                    rc1, rc2, rc3 = st.columns([2, 1, 1])
-                    rc1.markdown(f"👦 **첫째** ({int(row['횟수_첫째'])}회)")
-                    if rc2.button("➕", key=f"btn_p1_{row['ID']}_{i}", use_container_width=True):
-                        idx = books_df[books_df['ID'] == row['ID']].index[0]
-                        books_df.at[idx, '횟수_첫째'] += 1
-                        save_books(books_df)
-                        add_log(row['ID'], row['제목'], row['레벨'], "첫째")
-                        st.toast("👦 첫째 +1")
-                        st.rerun()
-                    if rc3.button("➖", key=f"btn_m1_{row['ID']}_{i}", use_container_width=True):
-                        idx = books_df[books_df['ID'] == row['ID']].index[0]
-                        if books_df.at[idx, '횟수_첫째'] > 0:
-                            books_df.at[idx, '횟수_첫째'] -= 1
-                            save_books(books_df)
-                            st.toast("👦 첫째 -1 (수정됨)")
-                            st.rerun()
-                        else:
-                            st.warning("0보다 작을 수 없습니다.")
+                    st.write("") # 간격
 
-                    rc4, rc5, rc6 = st.columns([2, 1, 1])
-                    rc4.markdown(f"👧 **둘째** ({int(row['횟수_둘째'])}회)")
-                    if rc5.button("➕", key=f"btn_p2_{row['ID']}_{i}", use_container_width=True):
-                        idx = books_df[books_df['ID'] == row['ID']].index[0]
-                        books_df.at[idx, '횟수_둘째'] += 1
-                        save_books(books_df)
-                        add_log(row['ID'], row['제목'], row['레벨'], "둘째")
-                        st.toast("👧 둘째 +1")
-                        st.rerun()
-                    if rc6.button("➖", key=f"btn_m2_{row['ID']}_{i}", use_container_width=True):
-                        idx = books_df[books_df['ID'] == row['ID']].index[0]
-                        if books_df.at[idx, '횟수_둘째'] > 0:
-                            books_df.at[idx, '횟수_둘째'] -= 1
+                    # [UI 개선] 읽기 카운트 컨트롤 (6:1:1 비율로 버튼 작게)
+                    # 첫째
+                    r1_col, r1_min, r1_plus = st.columns([6, 1, 1])
+                    with r1_col:
+                        st.markdown(f"👦 **첫째** : **{int(row['횟수_첫째'])}** 회")
+                    with r1_min:
+                        if st.button("➖", key=f"btn_m1_{row['ID']}_{i}"):
+                            idx = books_df[books_df['ID'] == row['ID']].index[0]
+                            if books_df.at[idx, '횟수_첫째'] > 0:
+                                books_df.at[idx, '횟수_첫째'] -= 1
+                                save_books(books_df)
+                                st.toast("수정됨 (-1)")
+                                st.rerun()
+                    with r1_plus:
+                        if st.button("➕", key=f"btn_p1_{row['ID']}_{i}"):
+                            idx = books_df[books_df['ID'] == row['ID']].index[0]
+                            books_df.at[idx, '횟수_첫째'] += 1
                             save_books(books_df)
-                            st.toast("👧 둘째 -1 (수정됨)")
+                            add_log(row['ID'], row['제목'], row['레벨'], "첫째")
+                            st.toast("기록됨 (+1)")
                             st.rerun()
-                        else:
-                            st.warning("0보다 작을 수 없습니다.")
 
-                    with st.expander("✏️ 수정 / 별점 / 메모"):
+                    # 둘째
+                    r2_col, r2_min, r2_plus = st.columns([6, 1, 1])
+                    with r2_col:
+                        st.markdown(f"👧 **둘째** : **{int(row['횟수_둘째'])}** 회")
+                    with r2_min:
+                        if st.button("➖", key=f"btn_m2_{row['ID']}_{i}"):
+                            idx = books_df[books_df['ID'] == row['ID']].index[0]
+                            if books_df.at[idx, '횟수_둘째'] > 0:
+                                books_df.at[idx, '횟수_둘째'] -= 1
+                                save_books(books_df)
+                                st.toast("수정됨 (-1)")
+                                st.rerun()
+                    with r2_plus:
+                        if st.button("➕", key=f"btn_p2_{row['ID']}_{i}"):
+                            idx = books_df[books_df['ID'] == row['ID']].index[0]
+                            books_df.at[idx, '횟수_둘째'] += 1
+                            save_books(books_df)
+                            add_log(row['ID'], row['제목'], row['레벨'], "둘째")
+                            st.toast("기록됨 (+1)")
+                            st.rerun()
+
+                    # 관리 메뉴
+                    with st.expander("⚙️ 관리 (수정/삭제/메모)"):
                         t_edit, l_edit = st.columns([3, 1])
                         new_title = t_edit.text_input("제목", value=row['제목'], key=f"tt_{row['ID']}_{i}")
                         new_lvl = l_edit.selectbox("레벨", [1,2,3,4,5], index=int(row['레벨'])-1, key=f"lv_{row['ID']}_{i}")
@@ -388,7 +395,6 @@ elif menu == "📖 서재 관리":
                             try: idx_r1 = STAR_OPTIONS.index(cr1)
                             except: idx_r1 = 0
                             nr1 = st.selectbox("별점", STAR_OPTIONS, index=idx_r1, key=f"s1_{row['ID']}_{i}")
-                            # [수정됨] 키 중복 방지를 위해 'txt_m1' 등으로 변경
                             nm1 = st.text_area("메모", value=row.get('메모_첫째', ''), key=f"txt_m1_{row['ID']}_{i}", height=60)
                         
                         with k2:
@@ -400,7 +406,7 @@ elif menu == "📖 서재 관리":
                             nm2 = st.text_area("메모", value=row.get('메모_둘째', ''), key=f"txt_m2_{row['ID']}_{i}", height=60)
 
                         bs1, bs2 = st.columns([1, 4])
-                        if bs1.button("저장", key=f"sv_{row['ID']}_{i}"):
+                        if bs1.button("💾 저장", key=f"sv_{row['ID']}_{i}"):
                             idx = books_df[books_df['ID'] == row['ID']].index[0]
                             books_df.at[idx, '제목'] = new_title
                             books_df.at[idx, '레벨'] = new_lvl
@@ -414,7 +420,7 @@ elif menu == "📖 서재 관리":
                             st.toast("저장 완료")
                             st.rerun()
 
-                        if bs2.button("삭제", key=f"del_{row['ID']}_{i}"):
+                        if bs2.button("🗑 삭제", key=f"del_{row['ID']}_{i}"):
                             if st.session_state.get(f"ck_{row['ID']}"):
                                 idx = books_df[books_df['ID'] == row['ID']].index[0]
                                 books_df = books_df.drop(idx)
