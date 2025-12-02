@@ -5,7 +5,7 @@ import requests
 import urllib.parse
 from PIL import Image, ImageEnhance
 from pyzbar.pyzbar import decode
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.express as px
 
 # [Google Sheets 연동 라이브러리]
@@ -34,25 +34,28 @@ def get_google_sheet_client():
     client = gspread.authorize(credentials)
     return client
 
-# --- [함수 2] 데이터 저장 (게시판) - 상단으로 이동 ---
+# --- [함수 2] 데이터 저장 (게시판) ---
 def save_board(df):
     client = get_google_sheet_client()
     sh = client.open_by_url(SHEET_URL)
     wks = sh.worksheet("board")
     
-    # 저장할 컬럼 (고정, 즐겨찾기 추가됨)
     save_cols = ['ID', '날짜', '내용', '고정', '즐겨찾기']
     for col in save_cols:
         if col not in df.columns: df[col] = ""
             
     df_tosave = df[save_cols].copy()
+    # 날짜를 문자열로 변환하여 저장 (오류 방지)
+    df_tosave['날짜'] = df_tosave['날짜'].astype(str)
+    
     header = df_tosave.columns.values.tolist()
     data = df_tosave.fillna("").values.tolist()
     
     wks.clear()
     wks.update(range_name='A1', values=[header] + data)
 
-# --- [함수 3] 데이터 로드 ---
+# --- [함수 3] 데이터 로드 (Robust Ver.) ---
+# get_all_records() 대신 get_all_values()를 사용하여 에러 방지
 def load_data():
     client = get_google_sheet_client()
     try:
@@ -61,11 +64,10 @@ def load_data():
         st.error(f"구글 시트 연결 오류: {e}")
         st.stop()
 
-    # 1. Books 데이터 (상태 컬럼 삭제)
+    # 1. Books 데이터 로드
     try:
         wks_books = sh.worksheet("books")
-        data_books = wks_books.get_all_records()
-        books_df = pd.DataFrame(data_books)
+        raw_data = wks_books.get_all_values() # [변경] 더 안전한 방식
         
         required_cols = [
             'ID', '제목', 'ISBN', '레벨', '표지URL', '음원URL',
@@ -73,32 +75,38 @@ def load_data():
             '반응_첫째', '반응_둘째', 
             '메모_첫째', '메모_둘째'
         ]
-        
-        if books_df.empty:
+
+        if not raw_data: # 데이터가 아예 없는 경우
             books_df = pd.DataFrame(columns=required_cols)
         else:
-            for col in required_cols:
-                if col not in books_df.columns: books_df[col] = ""
+            headers = raw_data[0]
+            rows = raw_data[1:]
+            # 헤더와 데이터 개수가 안 맞을 경우를 대비해 DataFrame 생성 방식 변경
+            books_df = pd.DataFrame(rows, columns=headers)
+
+        # 필수 컬럼 보장
+        for col in required_cols:
+            if col not in books_df.columns: books_df[col] = ""
+        
+        # '상태' 컬럼 삭제 (혹시 남아있다면)
+        if '상태' in books_df.columns:
+            books_df = books_df.drop(columns=['상태'])
             
-            # '상태' 컬럼이 남아있다면 제거 (코드 레벨에서 무시)
-            if '상태' in books_df.columns:
-                books_df = books_df.drop(columns=['상태'])
-                
-            # 데이터 정제
-            for col in ['반응_첫째', '반응_둘째']:
-                books_df[col] = books_df[col].replace("", "선택 안 함").fillna("선택 안 함")
-            for col in ['횟수_첫째', '횟수_둘째']:
-                books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
-            for col in ['ID', 'ISBN', '표지URL', '음원URL', '메모_첫째', '메모_둘째']:
-                books_df[col] = books_df[col].astype(str)
-            
-            # ID 보정
-            missing_ids = False
-            for i, row in books_df.iterrows():
-                if not row['ID'] or row['ID'].strip() == "":
-                    books_df.at[i, 'ID'] = str(uuid.uuid4())
-                    missing_ids = True
-            if missing_ids: save_books(books_df)
+        # 데이터 정제 (타입 변환)
+        for col in ['반응_첫째', '반응_둘째']:
+            books_df[col] = books_df[col].replace("", "선택 안 함").fillna("선택 안 함")
+        for col in ['횟수_첫째', '횟수_둘째']:
+            books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
+        for col in ['ID', 'ISBN', '표지URL', '음원URL', '메모_첫째', '메모_둘째']:
+            books_df[col] = books_df[col].astype(str)
+        
+        # ID 보정
+        missing_ids = False
+        for i, row in books_df.iterrows():
+            if not row['ID'] or row['ID'].strip() == "":
+                books_df.at[i, 'ID'] = str(uuid.uuid4())
+                missing_ids = True
+        if missing_ids: save_books(books_df)
 
     except gspread.exceptions.WorksheetNotFound:
         wks_books = sh.add_worksheet(title="books", rows=100, cols=20)
@@ -115,38 +123,47 @@ def load_data():
             '메모_첫째', '메모_둘째'
         ])
 
-    # 2. Logs 데이터
+    # 2. Logs 데이터 로드 (에러 발생 지점 수정됨)
     try:
         wks_logs = sh.worksheet("logs")
-        data_logs = wks_logs.get_all_records()
-        logs_df = pd.DataFrame(data_logs)
+        raw_logs = wks_logs.get_all_values() # [변경] 안전한 방식
         
         required_log_cols = ['날짜', '책ID', '제목', '레벨', '누가']
+
+        if not raw_logs:
+            logs_df = pd.DataFrame(columns=required_log_cols)
+        else:
+            headers = raw_logs[0]
+            rows = raw_logs[1:]
+            logs_df = pd.DataFrame(rows, columns=headers)
+
         for col in required_log_cols:
             if col not in logs_df.columns: logs_df[col] = ""
 
-        if logs_df.empty:
-            logs_df = pd.DataFrame(columns=required_log_cols)
-        else:
-            logs_df['날짜'] = pd.to_datetime(logs_df['날짜'], errors='coerce')
+        logs_df['날짜'] = pd.to_datetime(logs_df['날짜'], errors='coerce')
             
     except gspread.exceptions.WorksheetNotFound:
         wks_logs = sh.add_worksheet(title="logs", rows=100, cols=6)
         wks_logs.append_row(['날짜', '책ID', '제목', '레벨', '누가'])
         logs_df = pd.DataFrame(columns=['날짜', '책ID', '제목', '레벨', '누가'])
 
-    # 3. Board 데이터 (고정, 즐겨찾기 추가)
+    # 3. Board 데이터 로드
     try:
         wks_board = sh.worksheet("board")
-        data_board = wks_board.get_all_records()
-        board_df = pd.DataFrame(data_board)
+        raw_board = wks_board.get_all_values() # [변경] 안전한 방식
         
-        # 필수 컬럼 보장
         req_board_cols = ['ID', '날짜', '내용', '고정', '즐겨찾기']
+        
+        if not raw_board:
+            board_df = pd.DataFrame(columns=req_board_cols)
+        else:
+            headers = raw_board[0]
+            rows = raw_board[1:]
+            board_df = pd.DataFrame(rows, columns=headers)
+
         for col in req_board_cols:
             if col not in board_df.columns: board_df[col] = ""
             
-        # 불리언 처리 (문자열 "TRUE"/"FALSE"로 저장될 수 있음)
         board_df['고정'] = board_df['고정'].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
         board_df['즐겨찾기'] = board_df['즐겨찾기'].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
         
@@ -168,7 +185,7 @@ def load_data():
 
     return books_df, logs_df, board_df
 
-# --- [함수 4] 데이터 저장 (책 - 상태 제거됨) ---
+# --- [함수 4] 데이터 저장 (책) ---
 def save_books(df):
     client = get_google_sheet_client()
     sh = client.open_by_url(SHEET_URL)
@@ -232,13 +249,13 @@ def search_book_info(isbn):
 # 메인 UI
 # =========================================================
 
-st.set_page_config(page_title="아이 영어 독서 매니저 (v6.0)", layout="wide", page_icon="🧸")
+st.set_page_config(page_title="아이 영어 독서 매니저 (Final)", layout="wide", page_icon="🧸")
 
 with st.spinner("데이터 로딩 중..."):
     books_df, logs_df, board_df = load_data()
 
-st.title("📚 Smart English Library v6.0")
-st.caption("게시판 상단 고정 & 즐겨찾기 | 완독 기능 삭제")
+st.title("📚 Smart English Library v6.1")
+st.caption("안정성 패치 완료 (데이터 로딩 오류 해결)")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 정보 게시판"])
 
@@ -417,8 +434,6 @@ with tab3:
             img_url = st.text_input("표지 URL", value=st.session_state['reg_img'])
             aud_url = st.text_input("음원 URL", value=st.session_state['reg_audio'])
         
-        # 상태 선택박스 삭제됨
-
         st.markdown("##### 초기 반응 (선택)")
         k1, k2 = st.columns(2)
         r1 = k1.selectbox("첫째 별점", STAR_OPTIONS)
@@ -438,7 +453,7 @@ with tab3:
                     if k in st.session_state: del st.session_state[k]
                 st.success("등록 완료")
                 st.rerun()
-
+                
     st.markdown("###### 🎵 음원 QR 등록 (선택)")
     q_method = st.radio("QR 스캔", ["촬영", "갤러리"], horizontal=True, key="qr_m_reg")
     q_file = None
@@ -482,8 +497,8 @@ with tab4:
         if 'editing_id' not in st.session_state: st.session_state['editing_id'] = None
 
         # [정렬 로직] 1순위: 고정(True), 2순위: 날짜(최신순)
-        board_df['고정'] = board_df['고정'].astype(bool)
-        board_df['즐겨찾기'] = board_df['즐겨찾기'].astype(bool)
+        board_df['고정'] = board_df['고정'].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
+        board_df['즐겨찾기'] = board_df['즐겨찾기'].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
         
         sorted_df = board_df.sort_values(by=['고정', '날짜'], ascending=[False, False])
 
