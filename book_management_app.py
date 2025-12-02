@@ -34,7 +34,7 @@ def get_google_sheet_client():
     client = gspread.authorize(credentials)
     return client
 
-# --- [함수 2] 데이터 로드 ---
+# --- [함수 2] 데이터 로드 (안전장치 추가됨) ---
 def load_data():
     client = get_google_sheet_client()
     try:
@@ -57,9 +57,12 @@ def load_data():
         if books_df.empty:
             books_df = pd.DataFrame(columns=required_cols)
         else:
+            # 누락된 컬럼 자동 생성
             for col in required_cols:
                 if col not in books_df.columns:
                     books_df[col] = ""
+            
+            # 데이터 정제
             for col in ['반응_첫째', '반응_둘째']:
                 books_df[col] = books_df[col].replace("", "선택 안 함").fillna("선택 안 함")
             for col in ['ISBN', '표지URL', '음원URL', '반응_메모']:
@@ -76,16 +79,23 @@ def load_data():
             '반응_첫째', '반응_둘째', '반응_메모', '표지URL', '음원URL'
         ])
 
-    # 2. Logs 데이터 로드
+    # 2. Logs 데이터 로드 (에러 수정 부분)
     try:
         wks_logs = sh.worksheet("logs")
         data_logs = wks_logs.get_all_records()
         logs_df = pd.DataFrame(data_logs)
         
+        # [수정] 필수 컬럼이 없으면 강제로 생성 (KeyError 방지)
+        required_log_cols = ['날짜', '책ID', '제목', '레벨']
+        for col in required_log_cols:
+            if col not in logs_df.columns:
+                logs_df[col] = "" # 빈 값으로 컬럼 생성
+
         if logs_df.empty:
-            logs_df = pd.DataFrame(columns=['날짜', '책ID', '제목', '레벨'])
+            logs_df = pd.DataFrame(columns=required_log_cols)
         else:
-            logs_df['날짜'] = pd.to_datetime(logs_df['날짜'])
+            # 날짜 변환 (에러 발생 시 무시하고 진행하도록 설정)
+            logs_df['날짜'] = pd.to_datetime(logs_df['날짜'], errors='coerce')
             
     except gspread.exceptions.WorksheetNotFound:
         wks_logs = sh.add_worksheet(title="logs", rows=100, cols=5)
@@ -167,8 +177,8 @@ st.set_page_config(page_title="아이 영어 독서 매니저 (Pro)", layout="wi
 with st.spinner("구글 시트와 연결 중..."):
     books_df, logs_df = load_data()
 
-st.title("📚 Smart English Library v4.4")
-st.caption("유튜브 검색 복구 | 갤러리/카메라 통합 스캔 지원")
+st.title("📚 Smart English Library v4.5")
+st.caption("안정성 패치 완료 | 유튜브 검색 & 갤러리 스캔 지원")
 
 tab1, tab2, tab3 = st.tabs(["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록"])
 
@@ -245,7 +255,7 @@ with tab2:
                     if audio_url.startswith("http"):
                         st.link_button("🎧 직접 듣기", audio_url, help="등록된 음원 주소로 바로 연결")
                     
-                    # 2. ★ [요청 복구] 유튜브 검색(Read Aloud) 버튼 ★
+                    # 2. 유튜브 검색(Read Aloud) 버튼
                     search_query = f"{row['제목']} read a loud"
                     youtube_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
                     st.link_button("▶️ Read Aloud", youtube_url, help="유튜브에서 Read Aloud 영상 검색")
@@ -254,7 +264,7 @@ with tab2:
                 with c2:
                     new_title = st.text_input("제목", value=row['제목'], key=f"t_{row['ID']}", label_visibility="collapsed")
                     
-                    # 상세 수정 메뉴 (갤러리 스캔 지원 추가)
+                    # 상세 수정 메뉴
                     with st.expander("📝 상세 정보 / 반응 기록 / 음원 등록"):
                         st.caption(f"ISBN: {row['ISBN']}")
                         new_img = st.text_input("표지 URL", value=row['표지URL'], key=f"img_{row['ID']}")
@@ -264,7 +274,7 @@ with tab2:
                         
                         new_audio = st.text_input("음원 링크 (직접 입력)", value=audio_url, key=f"aud_{row['ID']}")
                         
-                        # [추가됨] QR 스캔 방식 선택 (서재 관리용)
+                        # [서재 관리용] QR 스캔 방식 선택
                         scan_method = st.radio("QR 스캔 방식", ["📸 카메라 촬영", "🖼️ 갤러리 업로드"], horizontal=True, key=f"sm_{row['ID']}")
                         
                         scan_res = None
