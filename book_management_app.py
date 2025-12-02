@@ -57,7 +57,7 @@ def save_board(df):
     load_data.clear()
     time.sleep(1)
 
-# --- [함수 3] 데이터 로드 (클리닝 로직 추가됨) ---
+# --- [함수 3] 데이터 로드 ---
 @st.cache_data(ttl=60, show_spinner="동기화 중...")
 def load_data():
     client = get_google_sheet_client()
@@ -91,21 +91,18 @@ def load_data():
         
         if '상태' in books_df.columns: books_df = books_df.drop(columns=['상태'])
             
-        # [데이터 클리닝] 옛날 텍스트 반응 제거 ("재미있어요" 등 -> "선택 안 함")
         for col in ['반응_첫째', '반응_둘째']:
             books_df[col] = books_df[col].apply(lambda x: x if x in STAR_OPTIONS else "선택 안 함")
 
         for col in ['횟수_첫째', '횟수_둘째']:
             books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
         
-        # ID 보정
         missing_ids = False
         for i, row in books_df.iterrows():
             if not row['ID'] or str(row['ID']).strip() == "":
                 books_df.at[i, 'ID'] = str(uuid.uuid4())
                 missing_ids = True
         
-        # 클리닝되거나 ID 생성된 경우 자동 저장 (다음번 로드 때 깨끗하게)
         if missing_ids: save_books(books_df)
 
     except gspread.exceptions.WorksheetNotFound:
@@ -232,12 +229,12 @@ def search_book_info(isbn):
 
 st.set_page_config(page_title="아이 영어 독서 매니저 (Final)", layout="wide", page_icon="🧸")
 
-# 데이터 로드 (캐시 적용)
+# 데이터 로드
 books_df, logs_df, board_df = load_data()
 
-st.title("📚 Smart English Library v6.3")
+st.title("📚 Smart English Library v6.4")
 
-# 🟢 [핵심] 메뉴 리셋 방지를 위한 상단 메뉴바 (st.radio 사용)
+# 상단 메뉴바
 menu = st.radio("이동할 메뉴를 선택하세요", ["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 정보 게시판"], horizontal=True, label_visibility="collapsed")
 
 st.divider()
@@ -278,7 +275,6 @@ if menu == "📊 대시보드":
             col = '반응_첫째' if target == "첫째" else '반응_둘째'
             
             if not books_df.empty:
-                # [자동 클리닝 적용됨] 이제 STAR_OPTIONS에 없는 값은 '선택 안 함'으로 바뀌어 있음
                 r_data = books_df[books_df[col] != '선택 안 함'][col].value_counts().reset_index()
                 r_data.columns = ['별점', '권수']
                 if not r_data.empty:
@@ -326,22 +322,48 @@ elif menu == "📖 서재 관리":
                     st.markdown(f"### {row['제목']}")
                     st.caption(f"ISBN: {row['ISBN']} | Lv.{row['레벨']}")
                     
-                    b_read1, b_read2 = st.columns(2)
-                    if b_read1.button(f"👦 첫째 읽기 ({int(row['횟수_첫째'])}회)", key=f"r1_{row['ID']}", use_container_width=True):
+                    # [변경] 읽기 버튼을 + / - 로 분리하여 배치
+                    st.write("---")
+                    
+                    # 첫째 컨트롤
+                    rc1, rc2, rc3 = st.columns([2, 1, 1])
+                    rc1.markdown(f"👦 **첫째** ({int(row['횟수_첫째'])}회)")
+                    if rc2.button("➕", key=f"p1_{row['ID']}", use_container_width=True):
                         idx = books_df[books_df['ID'] == row['ID']].index[0]
                         books_df.at[idx, '횟수_첫째'] += 1
                         save_books(books_df)
                         add_log(row['ID'], row['제목'], row['레벨'], "첫째")
-                        st.toast("👦 첫째 기록!")
+                        st.toast("👦 첫째 +1")
                         st.rerun()
-                        
-                    if b_read2.button(f"👧 둘째 읽기 ({int(row['횟수_둘째'])}회)", key=f"r2_{row['ID']}", use_container_width=True):
+                    if rc3.button("➖", key=f"m1_{row['ID']}", use_container_width=True):
+                        idx = books_df[books_df['ID'] == row['ID']].index[0]
+                        if books_df.at[idx, '횟수_첫째'] > 0:
+                            books_df.at[idx, '횟수_첫째'] -= 1
+                            save_books(books_df)
+                            st.toast("👦 첫째 -1 (수정됨)")
+                            st.rerun()
+                        else:
+                            st.warning("0보다 작을 수 없습니다.")
+
+                    # 둘째 컨트롤
+                    rc4, rc5, rc6 = st.columns([2, 1, 1])
+                    rc4.markdown(f"👧 **둘째** ({int(row['횟수_둘째'])}회)")
+                    if rc5.button("➕", key=f"p2_{row['ID']}", use_container_width=True):
                         idx = books_df[books_df['ID'] == row['ID']].index[0]
                         books_df.at[idx, '횟수_둘째'] += 1
                         save_books(books_df)
                         add_log(row['ID'], row['제목'], row['레벨'], "둘째")
-                        st.toast("👧 둘째 기록!")
+                        st.toast("👧 둘째 +1")
                         st.rerun()
+                    if rc6.button("➖", key=f"m2_{row['ID']}", use_container_width=True):
+                        idx = books_df[books_df['ID'] == row['ID']].index[0]
+                        if books_df.at[idx, '횟수_둘째'] > 0:
+                            books_df.at[idx, '횟수_둘째'] -= 1
+                            save_books(books_df)
+                            st.toast("👧 둘째 -1 (수정됨)")
+                            st.rerun()
+                        else:
+                            st.warning("0보다 작을 수 없습니다.")
 
                     with st.expander("✏️ 수정 / 별점 / 메모"):
                         t_edit, l_edit = st.columns([3, 1])
@@ -356,7 +378,6 @@ elif menu == "📖 서재 관리":
                         with k1:
                             st.caption("👦 첫째")
                             cr1 = row.get('반응_첫째', '선택 안 함')
-                            # 데이터 클리닝으로 인해 cr1은 무조건 STAR_OPTIONS 안에 있거나 '선택 안 함'임
                             try: idx_r1 = STAR_OPTIONS.index(cr1)
                             except: idx_r1 = 0
                             nr1 = st.selectbox("별점", STAR_OPTIONS, index=idx_r1, key=f"s1_{row['ID']}")
