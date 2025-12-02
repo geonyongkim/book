@@ -5,9 +5,9 @@ import requests
 import urllib.parse
 from PIL import Image, ImageEnhance
 from pyzbar.pyzbar import decode
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.express as px
-import time  # [추가] 과도한 요청 방지용 딜레이
+import time
 
 # [Google Sheets 연동 라이브러리]
 import gspread
@@ -21,7 +21,7 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1WyA_dM3_cxqurORJ1wbYACBFBgD
 # --- [별점 옵션 정의] ---
 STAR_OPTIONS = ["선택 안 함", "⭐", "⭐⭐", "⭐⭐⭐", "⭐⭐⭐⭐", "⭐⭐⭐⭐⭐"]
 
-# --- [함수 1] 구글 시트 연결 (리소스 캐싱) ---
+# --- [함수 1] 구글 시트 연결 ---
 @st.cache_resource
 def get_google_sheet_client():
     scopes = [
@@ -54,13 +54,11 @@ def save_board(df):
     wks.clear()
     wks.update(range_name='A1', values=[header] + data)
     
-    # [핵심] 저장 후 캐시 비우기 (다음 읽기 때 갱신되도록)
     load_data.clear()
-    time.sleep(1) # 연속 요청 방지 딜레이
+    time.sleep(1)
 
-# --- [함수 3] 데이터 로드 (데이터 캐싱 적용!) ---
-# 60초(TTL) 동안은 다시 요청하지 않고 메모리에 있는 데이터를 씀
-@st.cache_data(ttl=60, show_spinner="데이터 동기화 중...") 
+# --- [함수 3] 데이터 로드 (클리닝 로직 추가됨) ---
+@st.cache_data(ttl=60, show_spinner="동기화 중...")
 def load_data():
     client = get_google_sheet_client()
     try:
@@ -69,7 +67,7 @@ def load_data():
         st.error(f"구글 시트 연결 오류: {e}")
         st.stop()
 
-    # 1. Books 데이터 로드
+    # 1. Books 데이터
     try:
         wks_books = sh.worksheet("books")
         raw_data = wks_books.get_all_values()
@@ -91,65 +89,56 @@ def load_data():
         for col in required_cols:
             if col not in books_df.columns: books_df[col] = ""
         
-        if '상태' in books_df.columns:
-            books_df = books_df.drop(columns=['상태'])
+        if '상태' in books_df.columns: books_df = books_df.drop(columns=['상태'])
             
+        # [데이터 클리닝] 옛날 텍스트 반응 제거 ("재미있어요" 등 -> "선택 안 함")
         for col in ['반응_첫째', '반응_둘째']:
-            books_df[col] = books_df[col].replace("", "선택 안 함").fillna("선택 안 함")
+            books_df[col] = books_df[col].apply(lambda x: x if x in STAR_OPTIONS else "선택 안 함")
+
         for col in ['횟수_첫째', '횟수_둘째']:
             books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
-        for col in ['ID', 'ISBN', '표지URL', '음원URL', '메모_첫째', '메모_둘째']:
-            books_df[col] = books_df[col].astype(str)
         
-        # ID 보정 (저장은 여기서 하지 않음 - 읽기 전용 유지)
+        # ID 보정
+        missing_ids = False
         for i, row in books_df.iterrows():
-            if not row['ID'] or row['ID'].strip() == "":
+            if not row['ID'] or str(row['ID']).strip() == "":
                 books_df.at[i, 'ID'] = str(uuid.uuid4())
+                missing_ids = True
+        
+        # 클리닝되거나 ID 생성된 경우 자동 저장 (다음번 로드 때 깨끗하게)
+        if missing_ids: save_books(books_df)
 
     except gspread.exceptions.WorksheetNotFound:
-        # 시트가 없으면 임시 빈 DF 반환 (쓰기 함수에서 생성됨)
-        books_df = pd.DataFrame(columns=[
-            'ID', '제목', 'ISBN', '레벨', '표지URL', '음원URL',
-            '횟수_첫째', '횟수_둘째', 
-            '반응_첫째', '반응_둘째', 
-            '메모_첫째', '메모_둘째'
-        ])
+        books_df = pd.DataFrame(columns=required_cols)
 
-    # 2. Logs 데이터 로드
+    # 2. Logs 데이터
     try:
         wks_logs = sh.worksheet("logs")
         raw_logs = wks_logs.get_all_values()
-        
-        required_log_cols = ['날짜', '책ID', '제목', '레벨', '누가']
+        req_log_cols = ['날짜', '책ID', '제목', '레벨', '누가']
 
         if not raw_logs:
-            logs_df = pd.DataFrame(columns=required_log_cols)
+            logs_df = pd.DataFrame(columns=req_log_cols)
         else:
-            headers = raw_logs[0]
-            rows = raw_logs[1:]
-            logs_df = pd.DataFrame(rows, columns=headers)
+            logs_df = pd.DataFrame(raw_logs[1:], columns=raw_logs[0])
 
-        for col in required_log_cols:
+        for col in req_log_cols:
             if col not in logs_df.columns: logs_df[col] = ""
-
         logs_df['날짜'] = pd.to_datetime(logs_df['날짜'], errors='coerce')
             
     except gspread.exceptions.WorksheetNotFound:
         logs_df = pd.DataFrame(columns=['날짜', '책ID', '제목', '레벨', '누가'])
 
-    # 3. Board 데이터 로드
+    # 3. Board 데이터
     try:
         wks_board = sh.worksheet("board")
         raw_board = wks_board.get_all_values()
-        
         req_board_cols = ['ID', '날짜', '내용', '고정', '즐겨찾기']
         
         if not raw_board:
             board_df = pd.DataFrame(columns=req_board_cols)
         else:
-            headers = raw_board[0]
-            rows = raw_board[1:]
-            board_df = pd.DataFrame(rows, columns=headers)
+            board_df = pd.DataFrame(raw_board[1:], columns=raw_board[0])
 
         for col in req_board_cols:
             if col not in board_df.columns: board_df[col] = ""
@@ -162,7 +151,7 @@ def load_data():
                 board_df.at[i, 'ID'] = str(uuid.uuid4())
              
     except gspread.exceptions.WorksheetNotFound:
-        board_df = pd.DataFrame(columns=['ID', '날짜', '내용', '고정', '즐겨찾기'])
+        board_df = pd.DataFrame(columns=req_board_cols)
 
     return books_df, logs_df, board_df
 
@@ -171,11 +160,8 @@ def save_books(df):
     client = get_google_sheet_client()
     sh = client.open_by_url(SHEET_URL)
     
-    # 시트가 없을 경우 생성 로직 추가
-    try:
-        wks = sh.worksheet("books")
-    except gspread.exceptions.WorksheetNotFound:
-        wks = sh.add_worksheet(title="books", rows=100, cols=20)
+    try: wks = sh.worksheet("books")
+    except: wks = sh.add_worksheet("books", 100, 20)
 
     save_cols = [
         'ID', '제목', 'ISBN', '레벨', '표지URL', '음원URL',
@@ -193,7 +179,6 @@ def save_books(df):
     wks.clear()
     wks.update(range_name='A1', values=[header] + data)
     
-    # [핵심] 캐시 비우기
     load_data.clear()
     time.sleep(1)
 
@@ -202,16 +187,12 @@ def add_log(book_id, title, level, who):
     client = get_google_sheet_client()
     sh = client.open_by_url(SHEET_URL)
     
-    try:
-        wks = sh.worksheet("logs")
-    except gspread.exceptions.WorksheetNotFound:
-        wks = sh.add_worksheet(title="logs", rows=100, cols=10)
-        wks.append_row(['날짜', '책ID', '제목', '레벨', '누가'])
+    try: wks = sh.worksheet("logs")
+    except: wks = sh.add_worksheet("logs", 100, 10)
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     wks.append_row([today_str, str(book_id), str(title), int(level), str(who)])
     
-    # [핵심] 캐시 비우기
     load_data.clear()
     time.sleep(1)
 
@@ -251,57 +232,72 @@ def search_book_info(isbn):
 
 st.set_page_config(page_title="아이 영어 독서 매니저 (Final)", layout="wide", page_icon="🧸")
 
-# 데이터 로드 (캐시 적용됨)
+# 데이터 로드 (캐시 적용)
 books_df, logs_df, board_df = load_data()
 
-st.title("📚 Smart English Library v6.2")
-st.caption("안정성 강화 (API 호출 최적화)")
+st.title("📚 Smart English Library v6.3")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 정보 게시판"])
+# 🟢 [핵심] 메뉴 리셋 방지를 위한 상단 메뉴바 (st.radio 사용)
+menu = st.radio("이동할 메뉴를 선택하세요", ["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 정보 게시판"], horizontal=True, label_visibility="collapsed")
 
-# --- [탭 1] 대시보드 ---
-with tab1:
-    st.markdown("### 📈 독서 통계")
+st.divider()
+
+# ---------------------------------------------------------
+# 1. 대시보드 화면
+# ---------------------------------------------------------
+if menu == "📊 대시보드":
+    st.subheader("📈 독서 현황판")
+    
     if books_df.empty:
-        st.info("데이터가 없습니다.")
+        st.info("등록된 책이 없습니다.")
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("총 보유 도서", f"{len(books_df)}권")
-        c2.metric("누적 읽은 횟수", f"{len(logs_df)}회")
+        c2.metric("전체 누적 읽기", f"{len(logs_df)}회")
         
         count_1 = int(books_df['횟수_첫째'].sum())
         count_2 = int(books_df['횟수_둘째'].sum())
-        c3.metric("👦 첫째 독서", f"{count_1}회")
-        c4.metric("👧 둘째 독서", f"{count_2}회")
+        c3.metric("👦 첫째 독서량", f"{count_1}회")
+        c4.metric("👧 둘째 독서량", f"{count_2}회")
 
-        st.divider()
+        st.markdown("---")
+        
         col_chart1, col_chart2 = st.columns([2, 1])
         with col_chart1:
-            st.subheader("🗓️ 월간 독서 추이")
+            st.markdown("##### 🗓️ 월간 독서 추이")
             if not logs_df.empty:
                 daily_counts = logs_df.groupby(['날짜', '누가']).size().reset_index(name='권수')
                 fig = px.bar(daily_counts, x='날짜', y='권수', color='누가', barmode='group')
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("독서 기록이 없습니다.")
+
         with col_chart2:
-            st.subheader("⭐ 별점 현황")
-            target = st.radio("누구?", ["첫째", "둘째"], horizontal=True)
+            st.markdown("##### ⭐ 별점 반응 분석")
+            target = st.radio("분석 대상", ["첫째", "둘째"], horizontal=True)
             col = '반응_첫째' if target == "첫째" else '반응_둘째'
+            
             if not books_df.empty:
+                # [자동 클리닝 적용됨] 이제 STAR_OPTIONS에 없는 값은 '선택 안 함'으로 바뀌어 있음
                 r_data = books_df[books_df[col] != '선택 안 함'][col].value_counts().reset_index()
                 r_data.columns = ['별점', '권수']
-                if not r_data.empty: st.plotly_chart(px.pie(r_data, values='권수', names='별점', hole=0.4), use_container_width=True)
+                if not r_data.empty:
+                    fig_pie = px.pie(r_data, values='권수', names='별점', hole=0.4)
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.caption("아직 별점 기록이 없습니다.")
 
-# --- [탭 2] 서재 관리 ---
-with tab2:
+# ---------------------------------------------------------
+# 2. 서재 관리 화면
+# ---------------------------------------------------------
+elif menu == "📖 서재 관리":
     c_head, c_sort = st.columns([3, 2])
-    with c_head: st.subheader("보유 도서 목록")
+    with c_head: st.subheader("📖 보유 도서 목록")
     with c_sort:
         sort_option = st.selectbox("정렬 기준", ["최신 등록순", "첫째 많이 읽은 책", "둘째 많이 읽은 책", "레벨 높은 순"])
 
     if not books_df.empty:
         display_df = books_df.copy()
-        display_df['횟수_첫째'] = pd.to_numeric(display_df['횟수_첫째'], errors='coerce').fillna(0)
-        display_df['횟수_둘째'] = pd.to_numeric(display_df['횟수_둘째'], errors='coerce').fillna(0)
         
         if sort_option == "최신 등록순": display_df = display_df.iloc[::-1]
         elif sort_option == "첫째 많이 읽은 책": display_df = display_df.sort_values(by='횟수_첫째', ascending=False)
@@ -360,12 +356,18 @@ with tab2:
                         with k1:
                             st.caption("👦 첫째")
                             cr1 = row.get('반응_첫째', '선택 안 함')
-                            nr1 = st.selectbox("별점", STAR_OPTIONS, index=STAR_OPTIONS.index(cr1) if cr1 in STAR_OPTIONS else 0, key=f"s1_{row['ID']}")
+                            # 데이터 클리닝으로 인해 cr1은 무조건 STAR_OPTIONS 안에 있거나 '선택 안 함'임
+                            try: idx_r1 = STAR_OPTIONS.index(cr1)
+                            except: idx_r1 = 0
+                            nr1 = st.selectbox("별점", STAR_OPTIONS, index=idx_r1, key=f"s1_{row['ID']}")
                             nm1 = st.text_area("메모", value=row.get('메모_첫째', ''), key=f"m1_{row['ID']}", height=60)
+                        
                         with k2:
                             st.caption("👧 둘째")
                             cr2 = row.get('반응_둘째', '선택 안 함')
-                            nr2 = st.selectbox("별점", STAR_OPTIONS, index=STAR_OPTIONS.index(cr2) if cr2 in STAR_OPTIONS else 0, key=f"s2_{row['ID']}")
+                            try: idx_r2 = STAR_OPTIONS.index(cr2)
+                            except: idx_r2 = 0
+                            nr2 = st.selectbox("별점", STAR_OPTIONS, index=idx_r2, key=f"s2_{row['ID']}")
                             nm2 = st.text_area("메모", value=row.get('메모_둘째', ''), key=f"m2_{row['ID']}", height=60)
 
                         bs1, bs2 = st.columns([1, 4])
@@ -392,10 +394,14 @@ with tab2:
                             else:
                                 st.session_state[f"ck_{row['ID']}"] = True
                                 st.warning("삭제하려면 한 번 더 누르세요.")
+    else:
+        st.info("등록된 책이 없습니다.")
 
-# --- [탭 3] 새 책 등록 ---
-with tab3:
-    st.subheader("새 책 등록")
+# ---------------------------------------------------------
+# 3. 새 책 등록 화면
+# ---------------------------------------------------------
+elif menu == "➕ 새 책 등록":
+    st.subheader("➕ 새 책 등록")
     if 'reg_title' not in st.session_state: 
         st.session_state.update({'reg_title':"", 'reg_isbn':"", 'reg_img':"", 'reg_audio':"", 'search_done':False})
 
@@ -466,9 +472,11 @@ with tab3:
                 st.session_state['reg_audio'] = c
                 st.rerun()
 
-# --- [탭 4] 정보 게시판 ---
-with tab4:
-    st.header("📌 정보 게시판")
+# ---------------------------------------------------------
+# 4. 정보 게시판 화면
+# ---------------------------------------------------------
+elif menu == "📌 정보 게시판":
+    st.subheader("📌 정보 게시판")
     st.caption("고정(📌)과 즐겨찾기(★)를 활용해보세요.")
 
     with st.form("new_post", clear_on_submit=True):
@@ -508,7 +516,6 @@ with tab4:
                 
                 with st.container(border=True):
                     c_info, c_acts = st.columns([2, 1])
-                    
                     with c_info:
                         pin_icon = "📌" if row['고정'] else ""
                         st.caption(f"{pin_icon} {row['날짜']}")
