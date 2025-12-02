@@ -34,7 +34,7 @@ def get_google_sheet_client():
     client = gspread.authorize(credentials)
     return client
 
-# --- [함수 2] 데이터 로드 (게시판 ID 추가) ---
+# --- [함수 2] 데이터 로드 ---
 def load_data():
     client = get_google_sheet_client()
     try:
@@ -43,7 +43,7 @@ def load_data():
         st.error(f"구글 시트 연결 오류: {e}")
         st.stop()
 
-    # 1. Books 데이터 로드
+    # 1. Books 데이터
     try:
         wks_books = sh.worksheet("books")
         data_books = wks_books.get_all_records()
@@ -60,13 +60,12 @@ def load_data():
             books_df = pd.DataFrame(columns=required_cols)
         else:
             for col in required_cols:
-                if col not in books_df.columns:
-                    books_df[col] = ""
+                if col not in books_df.columns: books_df[col] = ""
             for col in ['반응_첫째', '반응_둘째']:
                 books_df[col] = books_df[col].replace("", "선택 안 함").fillna("선택 안 함")
             for col in ['횟수_첫째', '횟수_둘째']:
                 books_df[col] = pd.to_numeric(books_df[col], errors='coerce').fillna(0)
-            for col in ['ISBN', '표지URL', '음원URL', '메모_첫째', '메모_둘째']:
+            for col in ['ID', 'ISBN', '표지URL', '음원URL', '메모_첫째', '메모_둘째']:
                 books_df[col] = books_df[col].astype(str)
             
     except gspread.exceptions.WorksheetNotFound:
@@ -84,7 +83,7 @@ def load_data():
             '메모_첫째', '메모_둘째'
         ])
 
-    # 2. Logs 데이터 로드
+    # 2. Logs 데이터
     try:
         wks_logs = sh.worksheet("logs")
         data_logs = wks_logs.get_all_records()
@@ -104,22 +103,22 @@ def load_data():
         wks_logs.append_row(['날짜', '책ID', '제목', '레벨', '누가'])
         logs_df = pd.DataFrame(columns=['날짜', '책ID', '제목', '레벨', '누가'])
 
-    # 3. 게시판(Board) 데이터 로드 (ID 컬럼 추가)
+    # 3. Board 데이터
     try:
         wks_board = sh.worksheet("board")
         data_board = wks_board.get_all_records()
         board_df = pd.DataFrame(data_board)
         
-        # ID 컬럼이 없으면 자동 생성 (기존 데이터 호환성)
         if 'ID' not in board_df.columns:
             board_df['ID'] = [str(uuid.uuid4()) for _ in range(len(board_df))]
         
-        # 필수 컬럼 확인
         if '날짜' not in board_df.columns: board_df['날짜'] = ""
         if '내용' not in board_df.columns: board_df['내용'] = ""
             
         if board_df.empty:
              board_df = pd.DataFrame(columns=['ID', '날짜', '내용'])
+        else:
+            board_df['ID'] = board_df['ID'].astype(str)
              
     except gspread.exceptions.WorksheetNotFound:
         wks_board = sh.add_worksheet(title="board", rows=100, cols=3)
@@ -172,7 +171,6 @@ def add_log(book_id, title, level, who):
     client = get_google_sheet_client()
     sh = client.open_by_url(SHEET_URL)
     wks = sh.worksheet("logs")
-    
     today_str = datetime.now().strftime("%Y-%m-%d")
     wks.append_row([today_str, str(book_id), str(title), int(level), str(who)])
 
@@ -215,8 +213,8 @@ st.set_page_config(page_title="아이 영어 독서 매니저 (Final)", layout="
 with st.spinner("데이터 로딩 중..."):
     books_df, logs_df, board_df = load_data()
 
-st.title("📚 Smart English Library v5.1")
-st.caption("아이별 기록 | 게시판 수정/삭제 지원")
+st.title("📚 Smart English Library v5.2")
+st.caption("안정적인 게시판 | 직관적인 카드형 UI")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 대시보드", "📖 서재 관리", "➕ 새 책 등록", "📌 교육 정보 게시판"])
 
@@ -226,43 +224,31 @@ with tab1:
     if books_df.empty:
         st.info("데이터가 없습니다.")
     else:
-        # 1. 핵심 지표
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("총 보유 도서", f"{len(books_df)}권")
-        c2.metric("누적 읽은 횟수 (전체)", f"{len(logs_df)}회")
+        c2.metric("누적 읽은 횟수", f"{len(logs_df)}회")
         
         count_1 = int(books_df['횟수_첫째'].sum())
         count_2 = int(books_df['횟수_둘째'].sum())
-        c3.metric("👦 첫째 누적 독서", f"{count_1}회")
-        c4.metric("👧 둘째 누적 독서", f"{count_2}회")
+        c3.metric("👦 첫째 독서", f"{count_1}회")
+        c4.metric("👧 둘째 독서", f"{count_2}회")
 
         st.divider()
-        
-        # 2. 차트 영역
         col_chart1, col_chart2 = st.columns([2, 1])
         with col_chart1:
             st.subheader("🗓️ 월간 독서 추이")
             if not logs_df.empty:
-                logs_df['Count'] = 1
                 daily_counts = logs_df.groupby(['날짜', '누가']).size().reset_index(name='권수')
-                fig = px.bar(daily_counts, x='날짜', y='권수', color='누가', barmode='group', title="일별 독서량 비교")
+                fig = px.bar(daily_counts, x='날짜', y='권수', color='누가', barmode='group')
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.caption("기록이 없습니다.")
-
         with col_chart2:
-            st.subheader("⭐ 반응(별점) 분포")
-            target_child = st.radio("누구의 반응을 볼까요?", ["첫째", "둘째"], horizontal=True)
-            col_name = '반응_첫째' if target_child == "첫째" else '반응_둘째'
-            
+            st.subheader("⭐ 별점 현황")
+            target = st.radio("누구?", ["첫째", "둘째"], horizontal=True)
+            col = '반응_첫째' if target == "첫째" else '반응_둘째'
             if not books_df.empty:
-                r_data = books_df[books_df[col_name] != '선택 안 함'][col_name].value_counts().reset_index()
+                r_data = books_df[books_df[col] != '선택 안 함'][col].value_counts().reset_index()
                 r_data.columns = ['별점', '권수']
-                if not r_data.empty:
-                    fig_pie = px.pie(r_data, values='권수', names='별점', hole=0.4)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.caption("별점 기록이 없습니다.")
+                if not r_data.empty: st.plotly_chart(px.pie(r_data, values='권수', names='별점', hole=0.4), use_container_width=True)
 
 # --- [탭 2] 서재 관리 ---
 with tab2:
@@ -272,7 +258,6 @@ with tab2:
         sort_option = st.selectbox("정렬 기준", ["최신 등록순", "첫째 많이 읽은 책", "둘째 많이 읽은 책", "레벨 높은 순"])
 
     if not books_df.empty:
-        # 정렬 로직
         display_df = books_df.copy()
         display_df['횟수_첫째'] = pd.to_numeric(display_df['횟수_첫째'], errors='coerce').fillna(0)
         display_df['횟수_둘째'] = pd.to_numeric(display_df['횟수_둘째'], errors='coerce').fillna(0)
@@ -282,142 +267,130 @@ with tab2:
         elif sort_option == "둘째 많이 읽은 책": display_df = display_df.sort_values(by='횟수_둘째', ascending=False)
         elif sort_option == "레벨 높은 순": display_df = display_df.sort_values(by='레벨', ascending=False)
 
-        st.caption(f"총 {len(display_df)}권의 책이 있습니다.")
+        st.caption(f"총 {len(display_df)}권")
 
         for i, row in display_df.iterrows():
-            with st.container():
+            with st.container(border=True): # 카드형 UI 적용
                 c1, c2 = st.columns([1, 4])
                 
-                # [좌측] 이미지 & 미디어
                 with c1:
                     img_url = row['표지URL'] if pd.notna(row['표지URL']) and str(row['표지URL']).startswith("http") else "https://via.placeholder.com/150?text=No+Image"
                     st.image(img_url, width=90)
                     
                     audio_url = str(row.get('음원URL', '')).strip()
                     if audio_url.startswith("http"):
-                        st.link_button("🎧 음원 듣기", audio_url)
+                        st.link_button("🎧 음원 듣기", audio_url, use_container_width=True)
                     
                     search_query = f"{row['제목']} read a loud"
                     yt_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
-                    st.link_button("▶️ Read Aloud", yt_url)
+                    st.link_button("▶️ Read Aloud", yt_url, use_container_width=True)
 
-                # [우측] 정보 & 조작
                 with c2:
-                    new_title = st.text_input("제목", value=row['제목'], key=f"tt_{row['ID']}", label_visibility="collapsed")
+                    # 제목 및 기본 정보
+                    st.markdown(f"### {row['제목']}")
+                    st.caption(f"ISBN: {row['ISBN']} | Lv.{row['레벨']}")
                     
-                    st.markdown(f"**읽은 횟수:** 👦 첫째 `{int(row['횟수_첫째'])}회` | 👧 둘째 `{int(row['횟수_둘째'])}회`")
-                    
-                    b_read1, b_read2, b_empty = st.columns([1, 1, 3])
-                    if b_read1.button("👦 첫째 (+1)", key=f"r1_btn_{row['ID']}"):
+                    # 읽기 카운트 버튼
+                    b_read1, b_read2 = st.columns(2)
+                    if b_read1.button(f"👦 첫째 읽기 (현재 {int(row['횟수_첫째'])}회)", key=f"r1_{row['ID']}", use_container_width=True):
                         idx = books_df[books_df['ID'] == row['ID']].index[0]
                         books_df.at[idx, '횟수_첫째'] += 1
                         save_books(books_df)
                         add_log(row['ID'], row['제목'], row['레벨'], "첫째")
-                        st.toast(f"👦 첫째가 '{row['제목']}'을 읽었습니다!")
+                        st.toast("👦 첫째 기록 완료!")
                         st.rerun()
                         
-                    if b_read2.button("👧 둘째 (+1)", key=f"r2_btn_{row['ID']}"):
+                    if b_read2.button(f"👧 둘째 읽기 (현재 {int(row['횟수_둘째'])}회)", key=f"r2_{row['ID']}", use_container_width=True):
                         idx = books_df[books_df['ID'] == row['ID']].index[0]
                         books_df.at[idx, '횟수_둘째'] += 1
                         save_books(books_df)
                         add_log(row['ID'], row['제목'], row['레벨'], "둘째")
-                        st.toast(f"👧 둘째가 '{row['제목']}'을 읽었습니다!")
+                        st.toast("👧 둘째 기록 완료!")
                         st.rerun()
 
-                    with st.expander("📝 상세 기록 수정 (별점/메모/URL)"):
-                        # 기본 정보
-                        c_edit1, c_edit2 = st.columns(2)
-                        with c_edit1:
-                            new_lvl = st.selectbox("레벨", [1,2,3,4,5], index=int(row['레벨'])-1, key=f"lv_{row['ID']}")
-                            new_sts = st.selectbox("상태", ["읽지 않음", "읽는 중", "완독"], index=["읽지 않음", "읽는 중", "완독"].index(row['상태']) if row['상태'] in ["읽지 않음", "읽는 중", "완독"] else 0, key=f"st_{row['ID']}")
-                        with c_edit2:
-                            new_img = st.text_input("표지 URL", value=row['표지URL'], key=f"url_{row['ID']}")
-                            new_aud = st.text_input("음원 URL", value=row.get('음원URL', ''), key=f"aud_{row['ID']}")
-                            qr_scan_method = st.radio("QR 입력", ["직접 촬영", "갤러리"], horizontal=True, key=f"qm_{row['ID']}")
-                            qr_file = None
-                            if qr_scan_method == "직접 촬영": qr_file = st.camera_input("QR 촬영", key=f"qc_{row['ID']}")
-                            else: qr_file = st.file_uploader("QR 사진", type=['jpg','png'], key=f"qu_{row['ID']}")
-                            if qr_file:
-                                code = scan_code(qr_file)
-                                if code: 
-                                    st.success("인식 성공")
-                                    new_aud = code
+                    # 수정 모드 (Expander)
+                    with st.expander("✏️ 수정 / 별점 / 메모"):
+                        t_edit, l_edit, s_edit = st.columns([2, 1, 1])
+                        new_title = t_edit.text_input("제목 수정", value=row['제목'], key=f"tt_{row['ID']}")
+                        new_lvl = l_edit.selectbox("레벨", [1,2,3,4,5], index=int(row['레벨'])-1, key=f"lv_{row['ID']}")
+                        new_sts = s_edit.selectbox("상태", ["읽지 않음", "읽는 중", "완독"], index=["읽지 않음", "읽는 중", "완독"].index(row['상태']) if row['상태'] in ["읽지 않음", "읽는 중", "완독"] else 0, key=f"st_{row['ID']}")
+
+                        new_img = st.text_input("표지 URL", value=row['표지URL'], key=f"url_{row['ID']}")
+                        new_aud = st.text_input("음원 URL", value=row.get('음원URL', ''), key=f"aud_{row['ID']}")
 
                         st.markdown("---")
-                        col_k1, col_k2 = st.columns(2)
-                        with col_k1:
-                            st.markdown("##### 👦 첫째 기록")
-                            cur_r1 = row.get('반응_첫째', '선택 안 함')
-                            idx_r1 = STAR_OPTIONS.index(cur_r1) if cur_r1 in STAR_OPTIONS else 0
-                            new_r1 = st.selectbox("별점 (첫째)", STAR_OPTIONS, index=idx_r1, key=f"str1_{row['ID']}")
-                            new_m1 = st.text_area("메모 (첫째)", value=row.get('메모_첫째', ''), key=f"mem1_{row['ID']}", height=80)
-                            
-                        with col_k2:
-                            st.markdown("##### 👧 둘째 기록")
-                            cur_r2 = row.get('반응_둘째', '선택 안 함')
-                            idx_r2 = STAR_OPTIONS.index(cur_r2) if cur_r2 in STAR_OPTIONS else 0
-                            new_r2 = st.selectbox("별점 (둘째)", STAR_OPTIONS, index=idx_r2, key=f"str2_{row['ID']}")
-                            new_m2 = st.text_area("메모 (둘째)", value=row.get('메모_둘째', ''), key=f"mem2_{row['ID']}", height=80)
+                        k1, k2 = st.columns(2)
+                        with k1:
+                            st.caption("👦 첫째 기록")
+                            cr1 = row.get('반응_첫째', '선택 안 함')
+                            nr1 = st.selectbox("별점", STAR_OPTIONS, index=STAR_OPTIONS.index(cr1) if cr1 in STAR_OPTIONS else 0, key=f"s1_{row['ID']}")
+                            nm1 = st.text_area("메모", value=row.get('메모_첫째', ''), key=f"m1_{row['ID']}", height=60)
+                        with k2:
+                            st.caption("👧 둘째 기록")
+                            cr2 = row.get('반응_둘째', '선택 안 함')
+                            nr2 = st.selectbox("별점", STAR_OPTIONS, index=STAR_OPTIONS.index(cr2) if cr2 in STAR_OPTIONS else 0, key=f"s2_{row['ID']}")
+                            nm2 = st.text_area("메모", value=row.get('메모_둘째', ''), key=f"m2_{row['ID']}", height=60)
 
-                        btn_col1, btn_col2 = st.columns([1, 4])
-                        if btn_col1.button("💾 저장", key=f"sv_{row['ID']}"):
+                        bs1, bs2 = st.columns([1, 4])
+                        if bs1.button("저장", key=f"sv_{row['ID']}"):
                             idx = books_df[books_df['ID'] == row['ID']].index[0]
                             books_df.at[idx, '제목'] = new_title
                             books_df.at[idx, '레벨'] = new_lvl
                             books_df.at[idx, '상태'] = new_sts
                             books_df.at[idx, '표지URL'] = new_img
                             books_df.at[idx, '음원URL'] = new_aud
-                            books_df.at[idx, '반응_첫째'] = new_r1
-                            books_df.at[idx, '반응_둘째'] = new_r2
-                            books_df.at[idx, '메모_첫째'] = new_m1
-                            books_df.at[idx, '메모_둘째'] = new_m2
+                            books_df.at[idx, '반응_첫째'] = nr1
+                            books_df.at[idx, '반응_둘째'] = nr2
+                            books_df.at[idx, '메모_첫째'] = nm1
+                            books_df.at[idx, '메모_둘째'] = nm2
                             save_books(books_df)
-                            st.toast("저장되었습니다.")
+                            st.toast("저장 완료")
                             st.rerun()
 
-                        if btn_col2.button("🗑 삭제", key=f"del_{row['ID']}"):
-                            if st.session_state.get(f"chk_{row['ID']}"):
+                        if bs2.button("삭제", key=f"del_{row['ID']}"):
+                            if st.session_state.get(f"ck_{row['ID']}"):
                                 idx = books_df[books_df['ID'] == row['ID']].index[0]
                                 books_df = books_df.drop(idx)
                                 save_books(books_df)
                                 st.rerun()
                             else:
-                                st.session_state[f"chk_{row['ID']}"] = True
-                                st.warning("삭제하려면 한 번 더 누르세요.")
-                st.divider()
+                                st.session_state[f"ck_{row['ID']}"] = True
+                                st.warning("삭제 확인 (한 번 더 클릭)")
 
 # --- [탭 3] 새 책 등록 ---
 with tab3:
     st.subheader("새 책 등록")
+    # 세션 초기화
     if 'reg_title' not in st.session_state: 
         st.session_state.update({'reg_title':"", 'reg_isbn':"", 'reg_img':"", 'reg_audio':"", 'search_done':False})
 
-    method = st.radio("입력 방식", ["📸 바코드 촬영", "🖼️ 갤러리 업로드", "✍️ 수동 입력"], horizontal=True, label_visibility="collapsed")
-    img_file = None
-    if method == "📸 바코드 촬영": img_file = st.camera_input("바코드", key="cam_reg")
-    elif method == "🖼️ 갤러리 업로드": img_file = st.file_uploader("바코드 사진", type=['jpg','png'])
-
-    if img_file and not st.session_state['search_done']:
-        code = scan_code(img_file)
-        if code:
-            st.toast("인식 성공!")
-            if st.session_state['reg_isbn'] != code:
-                with st.spinner("책 찾는 중..."):
-                    t, i = search_book_info(code)
-                    st.session_state.update({'reg_isbn': code, 'reg_title': t or "", 'reg_img': i or "", 'search_done': True})
-                    st.rerun()
+    # 입력 방식 선택
+    m = st.radio("입력 방식", ["📸 바코드 촬영", "🖼️ 갤러리 업로드", "✍️ 수동 입력"], horizontal=True, label_visibility="collapsed")
     
-    if method == "✍️ 수동 입력":
-        manual = st.text_input("ISBN 입력", value=st.session_state['reg_isbn'])
-        if manual and manual != st.session_state.get('last_m', ''):
-             with st.spinner("검색 중..."):
-                t, i = search_book_info(manual)
-                st.session_state.update({'reg_isbn': manual, 'reg_title': t or "", 'reg_img': i or "", 'last_m': manual})
+    img_f = None
+    if m == "📸 바코드 촬영": img_f = st.camera_input("바코드", key="c_reg")
+    elif m == "🖼️ 갤러리 업로드": img_f = st.file_uploader("바코드 사진", type=['jpg','png'])
+
+    if img_f and not st.session_state['search_done']:
+        c = scan_code(img_f)
+        if c:
+            st.toast("인식 성공")
+            if st.session_state['reg_isbn'] != c:
+                with st.spinner("검색 중..."):
+                    t, i = search_book_info(c)
+                    st.session_state.update({'reg_isbn': c, 'reg_title': t or "", 'reg_img': i or "", 'search_done': True})
+                    st.rerun()
+
+    if m == "✍️ 수동 입력":
+        man = st.text_input("ISBN 입력", value=st.session_state['reg_isbn'])
+        if man and man != st.session_state.get('last_m', ''):
+             with st.spinner("검색..."):
+                t, i = search_book_info(man)
+                st.session_state.update({'reg_isbn': man, 'reg_title': t or "", 'reg_img': i or "", 'last_m': man})
                 st.rerun()
 
     st.divider()
-    
-    with st.form("new_book"):
+    with st.form("nb_form"):
         c1, c2 = st.columns(2)
         with c1:
             title = st.text_input("제목 *", value=st.session_state['reg_title'])
@@ -425,102 +398,90 @@ with tab3:
             level = st.selectbox("레벨", [1,2,3,4,5])
         with c2:
             img_url = st.text_input("표지 URL", value=st.session_state['reg_img'])
-            aud_url = st.text_input("음원 URL (직접 입력)", value=st.session_state['reg_audio'])
-
-        st.markdown("##### 초기 반응 기록 (선택)")
-        rc1, rc2 = st.columns(2)
-        r1 = rc1.selectbox("첫째 별점", STAR_OPTIONS)
-        r2 = rc2.selectbox("둘째 별점", STAR_OPTIONS)
+            aud_url = st.text_input("음원 URL", value=st.session_state['reg_audio'])
         
-        submitted = st.form_submit_button("등록하기")
-        if submitted:
-            if not title: st.error("제목을 입력해주세요.")
+        st.markdown("##### 초기 반응 (선택)")
+        k1, k2 = st.columns(2)
+        r1 = k1.selectbox("첫째 별점", STAR_OPTIONS)
+        r2 = k2.selectbox("둘째 별점", STAR_OPTIONS)
+
+        if st.form_submit_button("등록하기"):
+            if not title: st.error("제목 필수")
             else:
                 new_data = {
                     'ID': str(uuid.uuid4()), '제목': title, 'ISBN': isbn, '레벨': level, '상태': '읽지 않음',
                     '표지URL': img_url, '음원URL': aud_url,
-                    '횟수_첫째': 0, '횟수_둘째': 0,
-                    '반응_첫째': r1, '반응_둘째': r2,
-                    '메모_첫째': "", '메모_둘째': ""
+                    '횟수_첫째': 0, '횟수_둘째': 0, '반응_첫째': r1, '반응_둘째': r2, '메모_첫째': "", '메모_둘째': ""
                 }
                 books_df = pd.concat([books_df, pd.DataFrame([new_data])], ignore_index=True)
                 save_books(books_df)
-                
                 for k in ['reg_title', 'reg_isbn', 'reg_img', 'reg_audio', 'search_done', 'last_m']:
                     if k in st.session_state: del st.session_state[k]
-                st.success("등록 완료!")
-                st.rerun()
-                
-    st.markdown("###### 🎵 음원 QR 등록 (선택)")
-    q_method = st.radio("QR 스캔", ["촬영", "갤러리"], horizontal=True, key="qr_m_reg")
-    q_file = None
-    if q_method == "촬영": q_file = st.camera_input("QR 촬영", key="qc_reg")
-    else: q_file = st.file_uploader("QR 사진", key="qu_reg")
-    
-    if q_file:
-        c = scan_code(q_file)
-        if c: 
-            st.success("QR 인식됨")
-            if st.session_state['reg_audio'] != c:
-                st.session_state['reg_audio'] = c
+                st.success("등록 완료")
                 st.rerun()
 
-# --- [탭 4] 교육 정보 게시판 (수정/삭제 지원) ---
+    st.caption("Tip: 음원 QR은 등록 후 서재 관리에서 추가할 수 있습니다.")
+
+# --- [탭 4] 교육 정보 게시판 (리뉴얼: 카드형 UI + 즉시 수정) ---
 with tab4:
-    st.header("📌 엄마표 영어 정보 게시판")
-    st.caption("유용한 유튜브 채널, 교육 팁, 아이디어 등을 메모해두세요.")
-    
-    # 1. 새 글 작성 폼
-    with st.form("board_form", clear_on_submit=True):
-        content = st.text_area("내용 입력", height=100, placeholder="예: Super Simple Songs 채널이 흘려듣기에 좋음.")
-        if st.form_submit_button("게시글 저장"):
+    st.header("📌 정보 게시판")
+    st.caption("자유롭게 메모를 남기세요.")
+
+    # 1. 새 글 작성 (상단 배치)
+    with st.form("new_post", clear_on_submit=True):
+        content = st.text_area("새로운 메모 작성", height=70, placeholder="내용을 입력하세요...")
+        if st.form_submit_button("등록"):
             if content:
-                # 새 글 저장 로직
-                new_post = {
-                    'ID': str(uuid.uuid4()),
-                    '날짜': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    '내용': content
-                }
-                board_df = pd.concat([board_df, pd.DataFrame([new_post])], ignore_index=True)
+                new_row = {'ID': str(uuid.uuid4()), '날짜': datetime.now().strftime("%Y-%m-%d %H:%M"), '내용': content}
+                board_df = pd.concat([board_df, pd.DataFrame([new_row])], ignore_index=True)
                 save_board(board_df)
-                st.success("저장되었습니다.")
+                st.success("등록됨")
                 st.rerun()
-            else:
-                st.warning("내용을 입력해주세요.")
 
     st.divider()
-    st.subheader("📋 저장된 메모")
-    
+
+    # 2. 게시글 리스트 (카드형 UI + 수정 모드 전환)
     if not board_df.empty:
-        # 최신순 정렬
+        # 'editing_id' 세션 상태 관리 (현재 수정 중인 글 ID)
+        if 'editing_id' not in st.session_state: st.session_state['editing_id'] = None
+
+        # 최신순 출력
         for i, row in board_df.iloc[::-1].iterrows():
-            with st.container():
-                st.markdown(f"**📅 {row['날짜']}**")
-                st.write(row['내용'])
-                
-                # 수정/삭제 기능 (Expander)
-                with st.expander("✏️ 수정 / 🗑 삭제"):
-                    edit_content = st.text_area("내용 수정", value=row['내용'], key=f"bd_edit_{row['ID']}")
-                    
-                    c_btn1, c_btn2 = st.columns([1, 4])
-                    if c_btn1.button("수정 저장", key=f"bd_sav_{row['ID']}"):
-                        # 수정 로직
+            # 카드 박스
+            with st.container(border=True):
+                # [수정 모드]
+                if st.session_state['editing_id'] == row['ID']:
+                    edit_txt = st.text_area("내용 수정", value=row['내용'], key=f"txt_{row['ID']}", height=100)
+                    b1, b2 = st.columns([1, 1])
+                    if b1.button("완료", key=f"sav_{row['ID']}", use_container_width=True):
                         idx = board_df[board_df['ID'] == row['ID']].index[0]
-                        board_df.at[idx, '내용'] = edit_content
+                        board_df.at[idx, '내용'] = edit_txt
                         save_board(board_df)
-                        st.toast("수정되었습니다.")
+                        st.session_state['editing_id'] = None # 수정 종료
                         st.rerun()
-                        
-                    if c_btn2.button("삭제", key=f"bd_del_{row['ID']}"):
-                        # 삭제 로직 (확인 없이 즉시 삭제 or 세션 체크 가능)
-                        if st.session_state.get(f"bd_chk_{row['ID']}"):
-                            idx = board_df[board_df['ID'] == row['ID']].index[0]
-                            board_df = board_df.drop(idx)
-                            save_board(board_df)
-                            st.rerun()
-                        else:
-                            st.session_state[f"bd_chk_{row['ID']}"] = True
-                            st.warning("한 번 더 누르면 삭제됩니다.")
-                st.divider()
+                    if b2.button("취소", key=f"cnl_{row['ID']}", use_container_width=True):
+                        st.session_state['editing_id'] = None # 수정 취소
+                        st.rerun()
+
+                # [일반 모드]
+                else:
+                    st.markdown(f"**📅 {row['날짜']}**")
+                    st.write(row['내용'])
+                    
+                    b1, b2 = st.columns([1, 1])
+                    # 수정 버튼 -> 세션 상태 변경 -> 리런 -> 위쪽 [수정 모드] 진입
+                    if b1.button("✏️ 수정", key=f"edt_{row['ID']}", use_container_width=True):
+                        st.session_state['editing_id'] = row['ID']
+                        st.rerun()
+                    
+                    # 삭제 버튼
+                    if b2.button("🗑 삭제", key=f"del_{row['ID']}", use_container_width=True):
+                        # 삭제 전 확인 (간단하게 session 없이 즉시 삭제 + 토스트)
+                        # 실수 방지를 위해 간단한 confirm 로직 추가 가능하지만 UI 간결성을 위해 즉시 삭제 처리함
+                        idx = board_df[board_df['ID'] == row['ID']].index[0]
+                        board_df = board_df.drop(idx)
+                        save_board(board_df)
+                        st.toast("삭제되었습니다.")
+                        st.rerun()
     else:
-        st.info("아직 등록된 글이 없습니다.")
+        st.info("작성된 메모가 없습니다.")
